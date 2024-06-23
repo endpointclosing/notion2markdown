@@ -2,7 +2,6 @@ from datetime import datetime
 from pathlib import Path
 import json
 from itertools import chain
-from typing import List, Union, Optional
 from .utils import logger, normalize_id
 
 from notion_client import Client
@@ -10,22 +9,26 @@ from notion_client.helpers import iterate_paginated_api as paginate
 
 
 class NotionDownloader:
-    def __init__(self, token: str, filter: Optional[str]=None):
+    def __init__(self, token: str, filter: str | None = None):
         self.transformer = LastEditedToDateTime()
-        self.notion = NotionClient(token=token, transformer=self.transformer, filter=filter)
+        self.notion = NotionClient(
+            token=token, transformer=self.transformer, filter=filter
+        )
         self.io = NotionIO(self.transformer)
 
-    def download_url(self, url: str, out_dir: Union[str, Path]='./json'):
+    def download_url(self, url: str, out_dir: str | Path = "./json"):
         """Download the notion page or database."""
         out_dir = Path(out_dir)
-        slug = url.split("/")[-1].split('?')[0]
-        if '-' in slug:
-            page_id = slug.split('-')[-1]
+        slug = url.split("/")[-1].split("?")[0]
+        if "-" in slug:
+            page_id = slug.split("-")[-1]
             self.download_page(page_id, out_dir / f"{page_id}.json")
         else:
             self.download_database(slug, out_dir)
 
-    def download_page(self, page_id: str, out_path: Union[str, Path]='./json', fetch_metadata: bool=True):
+    def download_page(
+        self, page_id: str, out_path: str | Path = "./json", fetch_metadata: bool = True
+    ):
         """Download the notion page."""
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,7 +39,7 @@ class NotionDownloader:
             metadata = self.notion.get_metadata(page_id)
             self.io.save([metadata], out_path.parent / "database.json")
 
-    def download_database(self, database_id: str, out_dir: Union[str, Path]='./json'):
+    def download_database(self, database_id: str, out_dir: str | Path = "./json"):
         """Download the notion database and associated pages."""
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -52,14 +55,19 @@ class NotionDownloader:
 
 
 class LastEditedToDateTime:
-    def forward(self, blocks, key: str = "last_edited_time") -> List:
-        return [{
-            **block,
-            'last_edited_time': datetime.fromisoformat(block['last_edited_time'][:-1]),
-            'id': normalize_id(block['id']),
-        } for block in blocks]
+    def forward(self, blocks, key: str = "last_edited_time") -> list:
+        return [
+            {
+                **block,
+                "last_edited_time": datetime.fromisoformat(
+                    block["last_edited_time"][:-1]
+                ),
+                "id": normalize_id(block["id"]),
+            }
+            for block in blocks
+        ]
 
-    def reverse(self, o) -> Union[None, str]:
+    def reverse(self, o) -> None | str:
         if isinstance(o, datetime):
             return o.isoformat() + "Z"
 
@@ -68,30 +76,32 @@ class NotionIO:
     def __init__(self, transformer):
         self.transformer = transformer
 
-    def load(self, path: Union[str, Path]) -> List[dict]:
+    def load(self, path: str | Path) -> list[dict]:
         """Load blocks from json file."""
         if Path(path).exists():
             with open(path) as f:
                 return self.transformer.forward(json.load(f))
         return []
 
-    def save(self, blocks: List[dict], path: str):
+    def save(self, blocks: list[dict], path: str):
         """Dump blocks to json file."""
         with open(path, "w") as f:
             json.dump(blocks, f, default=self.transformer.reverse, indent=4)
 
 
 class NotionClient:
-    def __init__(self, token: str, transformer, filter: Optional[dict]=None):
+    def __init__(self, token: str, transformer, filter: dict | None = None):
         self.client = Client(auth=token)
         self.transformer = transformer
         self.filter = filter
 
     def get_metadata(self, page_id: str) -> dict:
         """Get page metadata as json."""
-        return self.transformer.forward([self.client.pages.retrieve(page_id=page_id)])[0]
+        return self.transformer.forward([self.client.pages.retrieve(page_id=page_id)])[
+            0
+        ]
 
-    def get_blocks(self, block_id: int) -> List:
+    def get_blocks(self, block_id: int) -> list:
         """Get all page blocks as json. Recursively fetches descendants."""
         blocks = []
         for child in chain(
@@ -103,7 +113,7 @@ class NotionClient:
             blocks.append(child)
         return list(self.transformer.forward(blocks))
 
-    def get_database(self, database_id: str) -> List:
+    def get_database(self, database_id: str) -> list:
         """Fetch pages in database as json."""
         if self.filter:
             results = paginate(
