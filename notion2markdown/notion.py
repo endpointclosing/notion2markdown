@@ -1,11 +1,10 @@
 from datetime import datetime
 from pathlib import Path
 import json
-from itertools import chain
-from .utils import logger, normalize_id
+from .utils import normalize_id
 
-from notion_client import Client
-from notion_client.helpers import iterate_paginated_api as paginate
+from notion_client import AsyncClient
+from notion_client.helpers import async_iterate_paginated_api
 
 
 class NotionDownloader:
@@ -16,42 +15,43 @@ class NotionDownloader:
         )
         self.io = NotionIO(self.transformer)
 
-    def download_url(self, url: str, out_dir: str | Path = "./json"):
+    async def download_url(self, url: str, out_dir: str | Path = "./json"):
         """Download the notion page or database."""
         out_dir = Path(out_dir)
         slug = url.split("/")[-1].split("?")[0]
         if "-" in slug:
             page_id = slug.split("-")[-1]
-            self.download_page(page_id, out_dir / f"{page_id}.json")
+            await self.download_page(page_id, out_dir / f"{page_id}.json")
         else:
-            self.download_database(slug, out_dir)
+            raise NotImplementedError
+            # self.download_database(slug, out_dir)
 
-    def download_page(
+    async def download_page(
         self, page_id: str, out_path: str | Path = "./json", fetch_metadata: bool = True
     ):
         """Download the notion page."""
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        blocks = self.notion.get_blocks(page_id)
+        blocks = await self.notion.get_blocks(page_id)
         self.io.save(blocks, out_path)
 
         if fetch_metadata:
-            metadata = self.notion.get_metadata(page_id)
+            metadata = await self.notion.get_metadata(page_id)
             self.io.save([metadata], out_path.parent / "database.json")
 
-    def download_database(self, database_id: str, out_dir: str | Path = "./json"):
-        """Download the notion database and associated pages."""
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / "database.json"
-        prev = {pg["id"]: pg["last_edited_time"] for pg in self.io.load(path)}
-        pages = self.notion.get_database(database_id)  # download database
-        self.io.save(pages, path)
-
-        for cur in pages:  # download individual pages in database IF updated
-            if prev.get(cur["id"], datetime(1, 1, 1)) < cur["last_edited_time"]:
-                self.download_page(cur["id"], out_dir / f"{cur['id']}.json", False)
-                logger.info(f"Downloaded {cur['url']}")
+    # def download_database(self, database_id: str, out_dir: str | Path = "./json"):
+    #     """Download the notion database and associated pages."""
+    #     out_dir = Path(out_dir)
+    #     out_dir.mkdir(parents=True, exist_ok=True)
+    #     path = out_dir / "database.json"
+    #     prev = {pg["id"]: pg["last_edited_time"] for pg in self.io.load(path)}
+    #     pages = self.notion.get_database(database_id)  # download database
+    #     self.io.save(pages, path)
+    #
+    #     for cur in pages:  # download individual pages in database IF updated
+    #         if prev.get(cur["id"], datetime(1, 1, 1)) < cur["last_edited_time"]:
+    #             self.download_page(cur["id"], out_dir / f"{cur['id']}.json", False)
+    #             logger.info(f"Downloaded {cur['url']}")
 
 
 class LastEditedToDateTime:
@@ -91,39 +91,44 @@ class NotionIO:
 
 class NotionClient:
     def __init__(self, token: str, transformer, filter: dict | None = None):
-        self.client = Client(auth=token)
+        self.client = AsyncClient(auth=token)
         self.transformer = transformer
         self.filter = filter
 
-    def get_metadata(self, page_id: str) -> dict:
+    async def get_metadata(self, page_id: str) -> dict:
         """Get page metadata as json."""
-        return self.transformer.forward([self.client.pages.retrieve(page_id=page_id)])[
-            0
-        ]
+        return self.transformer.forward(
+            [await self.client.pages.retrieve(page_id=page_id)]
+        )[0]
 
-    def get_blocks(self, block_id: int) -> list:
+    async def get_blocks(self, block_id: int) -> list:
         """Get all page blocks as json. Recursively fetches descendants."""
         blocks = []
-        for child in chain(
-            *paginate(self.client.blocks.children.list, block_id=block_id)
+
+        async for block_list in async_iterate_paginated_api(
+            self.client.blocks.children.list, block_id=block_id
         ):
-            child["children"] = (
-                list(self.get_blocks(child["id"])) if child["has_children"] else []
-            )
-            blocks.append(child)
+            for block in block_list:
+                block["children"] = (
+                    list(await self.get_blocks(block["id"]))
+                    if block["has_children"]
+                    else []
+                )
+                blocks.append(block)
+
         return list(self.transformer.forward(blocks))
 
-    def get_database(self, database_id: str) -> list:
-        """Fetch pages in database as json."""
-        if self.filter:
-            results = paginate(
-                self.client.databases.query,
-                database_id=database_id,
-                filter=self.filter,
-            )
-        else:
-            results = paginate(
-                self.client.databases.query,
-                database_id=database_id,
-            )
-        return list(self.transformer.forward(chain(*results)))
+    # def get_database(self, database_id: str) -> list:
+    #     """Fetch pages in database as json."""
+    #     if self.filter:
+    #         results = paginate(
+    #             self.client.databases.query,
+    #             # database_id=database_id,
+    #             filter=self.filter,
+    #         )
+    #     else:
+    #         results = paginate(
+    #             self.client.databases.query,
+    #             database_id=database_id,
+    #         )
+    #     return list(self.transformer.forward(chain(*results)))

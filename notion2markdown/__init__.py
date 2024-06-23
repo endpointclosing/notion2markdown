@@ -16,11 +16,11 @@ class NotionExporter:
             strip_meta_chars=strip_meta_chars, extension=extension
         )
 
-    def export_url(
+    async def export_url(
         self, url: str, json_dir: str | Path = "./json", md_dir: str | Path = "./md"
     ):
         """Export the notion page or database."""
-        self.downloader.download_url(url, json_dir)
+        await self.downloader.download_url(url, json_dir)
         return self.converter.convert(json_dir, md_dir)
 
     def export_database(
